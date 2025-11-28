@@ -72,20 +72,34 @@ sub download-zip-file(Str:D $url, Str:D $dir = '.') {
 sub get-emoji {
     # Since emoji sequence names are not canonical and unchangeable, we get
     # all of them starting with the first the feature was added in
-    my $first-emoji-ver = <4.0>;
+    my $first-emoji-ver = v4.0;
 
     say "\nGetting a listing of available Emoji versions";
-    my $emoji-base = "ftp://ftp.unicode.org/Public/emoji/";
-    my @emoji-vers = read-url($emoji-base).lines.map(*.split(/' '+/)[8]);
-    my @sorted-emoji-versions = @emoji-vers.grep(/^\d/).sort(*.Num);
-    say "Emoji versions found: ", @sorted-emoji-versions.join(' ');
+
+    # list of pairs, version => base url. Not a hash so we can preserve the sorted order.
+    my @emoji-vers = read-url("$unicode-ftp/emoji/").lines.map(*.split(/' '+/)[8]).grep(/^\d/);
+    @emoji-vers.=map({Pair.new($_, "$unicode-ftp/emoji/$_")});
+
+    # Note: since version 17.0, emoji files have been moved to
+    # /Public/<version>/emoji, which means this script won't find any further
+    # versions at the previous URL.
+    {
+        my @possible-extra-vers = read-url("$unicode-ftp/").lines.map(*.split(/' '+/)[8]).grep(/^\d/);
+        @possible-extra-vers.=grep({/^(\d+)/; +~$0 >= 17}); # don't bother with versions < 17.0.0
+        @possible-extra-vers.=map({Pair.new($_, "$unicode-ftp/$_/emoji")});
+        @emoji-vers.append: @possible-extra-vers if +@possible-extra-vers;
+    }
+
+    my @sorted-emoji-versions = @emoji-vers.grep(/^\d/).sort(*.key.Version);
+
+    say "Emoji versions found: ", @sorted-emoji-versions».key.join(' ');
 
     my @to-download = < ReadMe.txt emoji-data.txt emoji-sequences.txt
                         emoji-zwj-sequences.txt emoji-test.txt >;
 
-    for @sorted-emoji-versions.reverse.grep($first-emoji-ver <= *) -> $version {
-        put "\nEmoji version $version:";
-        my $emoji-data-url = "$emoji-base/$version";
+    for @sorted-emoji-versions.reverse.grep($first-emoji-ver <= *.key.Version) -> $version {
+        put "\nEmoji version $version.key():";
+        my $emoji-data-url = $version.value;
         my $readme = read-url("$emoji-data-url/ReadMe.txt").chomp;
         if $readme.match(/draft|PRELIMINARY/, :i) {
             say "Looks like this version is a draft. ReadMe.txt text: <<$readme>>";
@@ -95,8 +109,9 @@ sub get-emoji {
             my @urls = @to-download.map({ "$emoji-data-url/$_" });
             say "Fetching: @to-download[]";
 
-            my $emoji-folder = "emoji-$version".IO;
+            my $emoji-folder = "emoji-$version.key()".IO;
             $emoji-folder.mkdir;
+            note "Downloading to $emoji-folder";
             indir $emoji-folder, { download-files(@urls) };
         }
     }
